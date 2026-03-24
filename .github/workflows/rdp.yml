@@ -1,4 +1,4 @@
-name: Windows RDP (Cloudflare)
+name: Windows VPS (Optimized)
 
 on:
   workflow_dispatch:
@@ -9,19 +9,39 @@ jobs:
     timeout-minutes: 360
 
     steps:
-    - name: Setup RDP
+    # 🧠 Bật RDP
+    - name: Enable RDP
       run: |
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
+    # 🔐 Set password mạnh
     - name: Set password
       run: |
-        net user runneradmin P@ssw0rd123!
+        net user runneradmin P@ssw0rd@123
 
-    - name: Download cloudflared
+    # ⚡ Tăng hiệu năng (tắt bớt service không cần)
+    - name: Optimize System
+      run: |
+        sc config "DiagTrack" start= disabled
+        sc stop "DiagTrack"
+        sc config "SysMain" start= disabled
+        sc stop "SysMain"
+
+    # 📥 Tải cloudflared
+    - name: Download Cloudflared
       run: |
         Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
 
+    # 🌐 Start tunnel (KHÔNG token → ổn định)
     - name: Start Tunnel
       run: |
-        .\cloudflared.exe tunnel --url tcp://localhost:3389 --no-autoupdate --loglevel info --token eyJhIjoiNDJhNmJmNmE4NmEzYzgzNTZjMWNkYTVmMDE4NWJmYzMiLCJ0IjoiZjNlNWI1YjMtOTMwMi00Y2U4LTgzOWMtNTZhYTMzNTA5ZWIwIiwicyI6Ik1EazJaREl6WXpNdFl6WTVOaTAwWmpjM0xUa3laVEF0TkdFNU5ETXlPV0l4T0dOaCJ9
+        Start-Process -NoNewWindow -FilePath ".\cloudflared.exe" -ArgumentList "tunnel --url tcp://localhost:3389" 
+
+    # ⏱️ Keep Alive (giữ máy sống)
+    - name: Keep Alive
+      run: |
+        while ($true) {
+          echo "Still running..."
+          Start-Sleep -Seconds 300
+        }
