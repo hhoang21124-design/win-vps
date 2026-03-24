@@ -16,46 +16,43 @@ jobs:
         env:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
-          Write-Host "1. Đang cài đặt Tailscale qua Chocolatey..."
+          Write-Host "1. Installing Tailscale..."
           choco install tailscale -y --no-progress
           
-          Write-Host "2. Đợi service khởi động..."
+          Write-Host "2. Waiting for service..."
           Start-Sleep -Seconds 5
           
-          Write-Host "3. Đăng nhập Tailscale ngầm (Unattended)..."
-          # Thêm cờ --reset để dọn dẹp cấu hình lỗi cũ nếu có
+          Write-Host "3. Connecting to Tailscale..."
           & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTHKEY --unattended --reset
         shell: powershell
 
       - name: Enable RDP and Create User
         run: |
-          # Cho phép kết nối RDP trong Registry
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+          # Cho phep ket noi RDP
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
+          Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 1
           
-          # Xử lý tạo tài khoản hoặc cập nhật mật khẩu nếu đã tồn tại
-          $User = "RunnerAdmin"
-          $Password = ConvertTo-SecureString "TempPassword123!@" -AsPlainText -Force
+          # Su dung nhay don de tranh loi parse chuoi
+          $User = 'RunnerAdmin'
+          $Password = ConvertTo-SecureString 'TempPassword123!@' -AsPlainText -Force
           
           if (Get-LocalUser -Name $User -ErrorAction SilentlyContinue) {
-              Write-Host "Tài khoản $User đã tồn tại. Đang cập nhật lại mật khẩu..."
+              Write-Host "Tai khoan da ton tai. Dang cap nhat mat khau..."
               Set-LocalUser -Name $User -Password $Password
           } else {
-              Write-Host "Đang tạo tài khoản $User mới..."
-              New-LocalUser $User -Password $Password -FullName "Runner Admin" -Description "User for RDP Debugging"
-              Add-LocalGroupMember -Group "Administrators" -Member $User
+              Write-Host "Dang tao tai khoan moi..."
+              New-LocalUser -Name $User -Password $Password -FullName 'RunnerAdmin' -Description 'RDPUser'
+              Add-LocalGroupMember -Group 'Administrators' -Member $User
           }
         shell: powershell
 
       - name: Display Connection Info
         run: |
-          # Lấy địa chỉ IPv4 của runner trong mạng Tailscale
           $TailscaleIP = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
           
           Write-Host "==========================================================="
           Write-Host "RDP Server is READY!"
-          Write-Host "Mở Remote Desktop Connection trên máy bạn và kết nối tới:"
           Write-Host "IP Address: $TailscaleIP"
           Write-Host "Username:   RunnerAdmin"
           Write-Host "Password:   TempPassword123!@"
@@ -64,6 +61,6 @@ jobs:
 
       - name: Keep Runner Alive
         run: |
-          Write-Host "Đang giữ máy chủ hoạt động..."
+          Write-Host "Dang giu may chu hoat dong..."
           Start-Sleep -Seconds 21600
         shell: powershell
