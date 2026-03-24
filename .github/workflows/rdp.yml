@@ -1,4 +1,4 @@
-name: Windows VPS Ultimate
+name: Windows VPS (Cloudflare RDP)
 
 on:
   workflow_dispatch:
@@ -21,7 +21,7 @@ jobs:
       run: |
         net user runneradmin P@ssw0rd@123
 
-    # ⚡ Optimize system (FIX lỗi 1062)
+    # ⚡ Optimize system (fix lỗi 1062)
     - name: Optimize System
       run: |
         if ((Get-Service DiagTrack).Status -eq "Running") {
@@ -34,7 +34,7 @@ jobs:
         }
         Set-Service SysMain -StartupType Disabled
 
-    # 🚀 Tắt Defender realtime (tăng tốc)
+    # 🚀 Disable Defender realtime
     - name: Disable Defender
       run: |
         Set-MpPreference -DisableRealtimeMonitoring $true
@@ -44,12 +44,12 @@ jobs:
       run: |
         Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
 
-    # 🌐 Start tunnel (KHÔNG TOKEN)
-    - name: Start Tunnel
+    # 🌐 RUN NAMED TUNNEL (CHUẨN RDP)
+    - name: Start Cloudflare Tunnel
       run: |
-        Start-Process -NoNewWindow -FilePath ".\cloudflared.exe" -ArgumentList "tunnel --url tcp://localhost:3389"
+        .\cloudflared.exe tunnel run --token eyJhIjoiNDJhNmJmNmE4NmEzYzgzNTZjMWNkYTVmMDE4NWJmYzMiLCJ0IjoiZjNlNWI1YjMtOTMwMi00Y2U4LTgzOWMtNTZhYTMzNTA5ZWIwIiwicyI6Ik1EazJaREl6WXpNdFl6WTVOaTAwWmpjM0xUa3laVEF0TkdFNU5ETXlPV0l4T0dOaCJ9
 
-    # ⏱️ Keep alive (giữ máy chạy tối đa)
+    # ⏱️ Keep alive
     - name: Keep Alive
       run: |
         while ($true) {
