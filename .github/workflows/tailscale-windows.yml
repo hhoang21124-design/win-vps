@@ -23,7 +23,8 @@ jobs:
           Start-Sleep -Seconds 5
           
           Write-Host "3. Đăng nhập Tailscale ngầm (Unattended)..."
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTHKEY --unattended
+          # Thêm cờ --reset để dọn dẹp cấu hình lỗi cũ nếu có
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTHKEY --unattended --reset
         shell: powershell
 
       - name: Enable RDP and Create User
