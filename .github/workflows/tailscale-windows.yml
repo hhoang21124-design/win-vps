@@ -9,10 +9,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Connect to Tailscale VPN
-        uses: tailscale/github-action@v2
-        with:
-          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+      - name: Install and Connect Tailscale manually
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          Write-Host "1. Đang cài đặt Tailscale qua Chocolatey..."
+          choco install tailscale -y --no-progress
+          
+          Write-Host "2. Đợi service khởi động..."
+          Start-Sleep -Seconds 5
+          
+          Write-Host "3. Đăng nhập Tailscale ngầm (Unattended)..."
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTHKEY --unattended
+        shell: powershell
 
       - name: Enable RDP and Create User
         run: |
@@ -30,11 +39,11 @@ jobs:
       - name: Display Connection Info
         run: |
           # Lấy địa chỉ IPv4 của runner trong mạng Tailscale
-          $TailscaleIP = tailscale ip -4
+          $TailscaleIP = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
           
           Write-Host "==========================================================="
           Write-Host "RDP Server is READY!"
-          Write-Host "Open Remote Desktop Connection on your PC and connect to:"
+          Write-Host "Mở Remote Desktop Connection trên máy bạn và kết nối tới:"
           Write-Host "IP Address: $TailscaleIP"
           Write-Host "Username:   RunnerAdmin"
           Write-Host "Password:   TempPassword123!@"
@@ -43,6 +52,6 @@ jobs:
 
       - name: Keep Runner Alive
         run: |
-          # Giữ runner sống tối đa 6 giờ (giới hạn của GitHub Actions)
+          Write-Host "Đang giữ máy chủ hoạt động..."
           Start-Sleep -Seconds 21600
         shell: powershell
