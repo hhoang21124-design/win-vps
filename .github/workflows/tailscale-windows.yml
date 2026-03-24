@@ -1,0 +1,48 @@
+name: Debug Windows CI via Tailscale RDP
+on:
+  workflow_dispatch:
+
+jobs:
+  debug-runner:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Connect to Tailscale VPN
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: Enable RDP and Create User
+        run: |
+          # Cho phép kết nối RDP trong Registry
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+          
+          # Tạo tài khoản đăng nhập
+          $Password = ConvertTo-SecureString "TempPassword123!@" -AsPlainText -Force
+          New-LocalUser "RunnerAdmin" -Password $Password -FullName "Runner Admin" -Description "User for RDP Debugging"
+          Add-LocalGroupMember -Group "Administrators" -Member "RunnerAdmin"
+        shell: powershell
+
+      - name: Display Connection Info
+        run: |
+          # Lấy địa chỉ IPv4 của runner trong mạng Tailscale
+          $TailscaleIP = tailscale ip -4
+          
+          Write-Host "==========================================================="
+          Write-Host "RDP Server is READY!"
+          Write-Host "Open Remote Desktop Connection on your PC and connect to:"
+          Write-Host "IP Address: $TailscaleIP"
+          Write-Host "Username:   RunnerAdmin"
+          Write-Host "Password:   TempPassword123!@"
+          Write-Host "==========================================================="
+        shell: powershell
+
+      - name: Keep Runner Alive
+        run: |
+          # Giữ runner sống tối đa 6 giờ (giới hạn của GitHub Actions)
+          Start-Sleep -Seconds 21600
+        shell: powershell
