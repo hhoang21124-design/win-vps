@@ -1,4 +1,4 @@
-name: Windows VPS (Optimized)
+name: Windows VPS Ultimate
 
 on:
   workflow_dispatch:
@@ -9,39 +9,50 @@ jobs:
     timeout-minutes: 360
 
     steps:
-    # 🧠 Bật RDP
+
+    # 🔓 Enable RDP
     - name: Enable RDP
       run: |
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-    # 🔐 Set password mạnh
+    # 🔐 Set password
     - name: Set password
       run: |
         net user runneradmin P@ssw0rd@123
 
-    # ⚡ Tăng hiệu năng (tắt bớt service không cần)
+    # ⚡ Optimize system (FIX lỗi 1062)
     - name: Optimize System
       run: |
-        sc config "DiagTrack" start= disabled
-        sc stop "DiagTrack"
-        sc config "SysMain" start= disabled
-        sc stop "SysMain"
+        if ((Get-Service DiagTrack).Status -eq "Running") {
+          Stop-Service DiagTrack -Force
+        }
+        Set-Service DiagTrack -StartupType Disabled
 
-    # 📥 Tải cloudflared
+        if ((Get-Service SysMain).Status -eq "Running") {
+          Stop-Service SysMain -Force
+        }
+        Set-Service SysMain -StartupType Disabled
+
+    # 🚀 Tắt Defender realtime (tăng tốc)
+    - name: Disable Defender
+      run: |
+        Set-MpPreference -DisableRealtimeMonitoring $true
+
+    # 📥 Download cloudflared
     - name: Download Cloudflared
       run: |
         Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
 
-    # 🌐 Start tunnel (KHÔNG token → ổn định)
+    # 🌐 Start tunnel (KHÔNG TOKEN)
     - name: Start Tunnel
       run: |
-        Start-Process -NoNewWindow -FilePath ".\cloudflared.exe" -ArgumentList "tunnel --url tcp://localhost:3389" 
+        Start-Process -NoNewWindow -FilePath ".\cloudflared.exe" -ArgumentList "tunnel --url tcp://localhost:3389"
 
-    # ⏱️ Keep Alive (giữ máy sống)
+    # ⏱️ Keep alive (giữ máy chạy tối đa)
     - name: Keep Alive
       run: |
         while ($true) {
-          echo "Still running..."
+          Write-Output "Running..."
           Start-Sleep -Seconds 300
         }
