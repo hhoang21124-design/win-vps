@@ -2,6 +2,9 @@ name: Debug Windows CI via Tailscale RDP
 on:
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   debug-runner:
     runs-on: windows-latest
@@ -30,10 +33,18 @@ jobs:
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
           
-          # Tạo tài khoản đăng nhập
+          # Xử lý tạo tài khoản hoặc cập nhật mật khẩu nếu đã tồn tại
+          $User = "RunnerAdmin"
           $Password = ConvertTo-SecureString "TempPassword123!@" -AsPlainText -Force
-          New-LocalUser "RunnerAdmin" -Password $Password -FullName "Runner Admin" -Description "User for RDP Debugging"
-          Add-LocalGroupMember -Group "Administrators" -Member "RunnerAdmin"
+          
+          if (Get-LocalUser -Name $User -ErrorAction SilentlyContinue) {
+              Write-Host "Tài khoản $User đã tồn tại. Đang cập nhật lại mật khẩu..."
+              Set-LocalUser -Name $User -Password $Password
+          } else {
+              Write-Host "Đang tạo tài khoản $User mới..."
+              New-LocalUser $User -Password $Password -FullName "Runner Admin" -Description "User for RDP Debugging"
+              Add-LocalGroupMember -Group "Administrators" -Member $User
+          }
         shell: powershell
 
       - name: Display Connection Info
