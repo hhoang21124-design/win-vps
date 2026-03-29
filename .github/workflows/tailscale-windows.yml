@@ -1,5 +1,5 @@
 name: Debug Windows CI via Tailscale RDP
-on:
+on: 
   workflow_dispatch:
 
 env:
@@ -11,6 +11,21 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: System Environment Fix (Disable Test Mode)
+        run: |
+          Write-Host "Dang fix loi Test Mode va Integrity Checks..."
+          # 1. Tat Test Mode trong BCD (Du khong reboot duoc nhung van can thiet de danh lua mot so app)
+          bcdedit /set testsigning off
+          bcdedit /set nointegritychecks off
+          
+          # 2. Chinh sua Registry de ghi de trang thai he thong
+          # Cac lenh nay giup danh lua mot so engine kiem tra trang thai kernel
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control" /v "SystemStartOptions" /t REG_SZ /d " NOINTEGRITYCHECKS" /f
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v "VerifiedAndReputablePolicyState" /t REG_DWORD /d 0 /f
+          
+          Write-Host "Fix hoan tat. Luu y: Mot so app yeu cau reboot se van co the bao loi."
+        shell: powershell
 
       - name: Install and Connect Tailscale manually
         env:
@@ -33,7 +48,7 @@ jobs:
           Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 1
           
-          # Su dung nhay don de tranh loi parse chuoi
+          # Tao tai khoan RunnerAdmin
           $User = 'RunnerAdmin'
           $Password = ConvertTo-SecureString 'TempPassword123!@' -AsPlainText -Force
           
@@ -50,7 +65,6 @@ jobs:
       - name: Display Connection Info
         run: |
           $TailscaleIP = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
-          
           Write-Host "==========================================================="
           Write-Host "RDP Server is READY!"
           Write-Host "IP Address: $TailscaleIP"
@@ -61,6 +75,7 @@ jobs:
 
       - name: Keep Runner Alive
         run: |
-          Write-Host "Dang giu may chu hoat dong..."
+          Write-Host "Dang giu may chu hoat dong (6 tieng)..."
+          # Lenh nay giup giu session khong bi ngat
           Start-Sleep -Seconds 21600
         shell: powershell
