@@ -12,19 +12,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: System Environment Fix (Disable Test Mode)
+      - name: Fix System Environment (Disable Test Mode)
         run: |
-          Write-Host "Dang fix loi Test Mode va Integrity Checks..."
-          # 1. Tat Test Mode trong BCD (Du khong reboot duoc nhung van can thiet de danh lua mot so app)
+          Write-Host "--- Dang thuc hien Fix Kernel Integrity ---"
+          # Tat Test Mode va Integrity Checks o cap do he thong
           bcdedit /set testsigning off
           bcdedit /set nointegritychecks off
           
-          # 2. Chinh sua Registry de ghi de trang thai he thong
-          # Cac lenh nay giup danh lua mot so engine kiem tra trang thai kernel
+          # Force ghi de vao Registry de "lua" cac ung dung kiem tra trang thai boot
           reg add "HKLM\SYSTEM\CurrentControlSet\Control" /v "SystemStartOptions" /t REG_SZ /d " NOINTEGRITYCHECKS" /f
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v "VerifiedAndReputablePolicyState" /t REG_DWORD /d 0 /f
           
-          Write-Host "Fix hoan tat. Luu y: Mot so app yeu cau reboot se van co the bao loi."
+          # Reset lai trang thai Kernel Code Integrity qua Registry
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v "FeatureSettingsOverride" /t REG_DWORD /d 0 /f
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v "FeatureSettingsOverrideMask" /t REG_DWORD /d 3 /f
+          
+          Write-Host "Fix hoan tat. Dang tiep tuc setup..."
         shell: powershell
 
       - name: Install and Connect Tailscale manually
@@ -53,10 +56,8 @@ jobs:
           $Password = ConvertTo-SecureString 'TempPassword123!@' -AsPlainText -Force
           
           if (Get-LocalUser -Name $User -ErrorAction SilentlyContinue) {
-              Write-Host "Tai khoan da ton tai. Dang cap nhat mat khau..."
               Set-LocalUser -Name $User -Password $Password
           } else {
-              Write-Host "Dang tao tai khoan moi..."
               New-LocalUser -Name $User -Password $Password -FullName 'RunnerAdmin' -Description 'RDPUser'
               Add-LocalGroupMember -Group 'Administrators' -Member $User
           }
@@ -66,16 +67,15 @@ jobs:
         run: |
           $TailscaleIP = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
           Write-Host "==========================================================="
-          Write-Host "RDP Server is READY!"
-          Write-Host "IP Address: $TailscaleIP"
-          Write-Host "Username:   RunnerAdmin"
-          Write-Host "Password:   TempPassword123!@"
+          Write-Host "VPS CUA BAN DA SAN SANG!"
+          Write-Host "IP Tailscale: $TailscaleIP"
+          Write-Host "User:         RunnerAdmin"
+          Write-Host "Pass:         TempPassword123!@"
           Write-Host "==========================================================="
         shell: powershell
 
       - name: Keep Runner Alive
         run: |
-          Write-Host "Dang giu may chu hoat dong (6 tieng)..."
-          # Lenh nay giup giu session khong bi ngat
+          Write-Host "Dang giu VPS song trong 6 tieng..."
           Start-Sleep -Seconds 21600
         shell: powershell
