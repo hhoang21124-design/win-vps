@@ -115,7 +115,7 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
-          $root = "C:\\ProgramData\\OpenCodeBootstrap"
+          $root = "C:\ProgramData\OpenCodeBootstrap"
           New-Item -ItemType Directory -Path $root -Force | Out-Null
 
           # Resolve the current official Windows x64 desktop release.
@@ -228,6 +228,7 @@ jobs:
           Write-Host "============================================================"
           Write-Host "IMPORTANT: do not Restart/Shutdown Windows and do not disable network adapters."
           Write-Host "Starting another run will be queued instead of cancelling this VPS."
+          Write-Host "OpenCode Desktop will install silently and open automatically after RDP login."
 
       - name: Keep session available and monitor runner
         shell: powershell
