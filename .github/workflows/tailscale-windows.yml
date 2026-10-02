@@ -111,6 +111,108 @@ jobs:
           "username=$user" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "password=$password" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
+      - name: Prepare OpenCode Desktop auto-start
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = "C:\\ProgramData\\OpenCodeBootstrap"
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+
+          # Resolve the current official Windows x64 desktop release.
+          $release = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/anomalyco/opencode/releases/latest" `
+            -Headers @{ "User-Agent" = "github-actions-opencode-bootstrap" }
+
+          $asset = $release.assets | Where-Object { $_.name -eq "opencode-desktop-win-x64.exe" } | Select-Object -First 1
+          if (-not $asset) { throw "OpenCode Windows x64 desktop asset was not found in the latest release." }
+
+          $installer = Join-Path $root "opencode-desktop-win-x64.exe"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installer -UseBasicParsing
+
+          # Verify the SHA-256 published with the GitHub release when available.
+          if ($asset.digest -and $asset.digest.StartsWith("sha256:")) {
+            $expected = $asset.digest.Substring(7).ToLowerInvariant()
+            $actual = (Get-FileHash -Path $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "OpenCode installer SHA-256 mismatch." }
+          }
+
+          $bootstrap = @'
+          $ErrorActionPreference = "Stop"
+          Start-Sleep -Seconds 8
+
+          $installer = "C:\ProgramData\OpenCodeBootstrap\opencode-desktop-win-x64.exe"
+          $log = "C:\ProgramData\OpenCodeBootstrap\bootstrap.log"
+
+          function Find-OpenCodeExe {
+            $candidates = @(
+              (Join-Path $env:LOCALAPPDATA "Programs\OpenCode\OpenCode.exe"),
+              (Join-Path $env:LOCALAPPDATA "Programs\opencode\OpenCode.exe"),
+              (Join-Path $env:LOCALAPPDATA "Programs\opencode-desktop\OpenCode.exe")
+            )
+
+            foreach ($candidate in $candidates) {
+              if (Test-Path $candidate) { return $candidate }
+            }
+
+            $programs = Join-Path $env:LOCALAPPDATA "Programs"
+            if (Test-Path $programs) {
+              $found = Get-ChildItem -Path $programs -Filter "OpenCode.exe" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($found) { return $found.FullName }
+            }
+
+            return $null
+          }
+
+          try {
+            $exe = Find-OpenCodeExe
+
+            if (-not $exe) {
+              if (-not (Test-Path $installer)) { throw "OpenCode installer is missing." }
+              Add-Content -Path $log -Value "$(Get-Date -Format o) Installing OpenCode Desktop..."
+              $proc = Start-Process -FilePath $installer -ArgumentList "/S" -Wait -PassThru
+              if ($proc.ExitCode -ne 0) { throw "OpenCode installer exited with code $($proc.ExitCode)." }
+
+              Start-Sleep -Seconds 4
+              $exe = Find-OpenCodeExe
+            }
+
+            if (-not $exe) { throw "OpenCode.exe was not found after installation." }
+
+            if (-not (Get-Process -Name "OpenCode" -ErrorAction SilentlyContinue)) {
+              Add-Content -Path $log -Value "$(Get-Date -Format o) Starting $exe"
+              Start-Process -FilePath $exe -WorkingDirectory $env:USERPROFILE
+            }
+          }
+          catch {
+            Add-Content -Path $log -Value "$(Get-Date -Format o) ERROR: $($_.Exception.Message)"
+          }
+          '@
+
+          $bootstrapPath = Join-Path $root "Start-OpenCode.ps1"
+          Set-Content -Path $bootstrapPath -Value $bootstrap -Encoding UTF8
+
+          # Run hidden at RunnerAdmin logon: GUI opens, PowerShell console stays hidden.
+          $account = "$env:COMPUTERNAME\RunnerAdmin"
+          $action = New-ScheduledTaskAction `
+            -Execute "powershell.exe" `
+            -Argument "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$bootstrapPath`""
+
+          $trigger = New-ScheduledTaskTrigger -AtLogOn -User $account
+          $principal = New-ScheduledTaskPrincipal -UserId $account -LogonType Interactive -RunLevel Highest
+          $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+
+          Register-ScheduledTask `
+            -TaskName "OpenCode Desktop AutoStart" `
+            -Action $action `
+            -Trigger $trigger `
+            -Principal $principal `
+            -Settings $settings `
+            -Description "Silently install and launch OpenCode Desktop when RunnerAdmin signs in." `
+            -Force | Out-Null
+
+          Write-Host "OpenCode Desktop latest release cached."
+          Write-Host "It will silently install and open automatically when RunnerAdmin logs in."
+          Write-Host "No PowerShell console window will be shown."
       - name: Connection info
         shell: powershell
         env:
