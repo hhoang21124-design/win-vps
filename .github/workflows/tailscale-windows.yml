@@ -4,19 +4,23 @@ on:
   workflow_dispatch:
     inputs:
       session_minutes:
-        description: "RDP session length in minutes (30-330)"
+        description: "RDP session length in minutes (30-320)"
         required: true
         default: "240"
 
 permissions:
   contents: read
 
+concurrency:
+  group: temporary-windows-rdp
+  cancel-in-progress: false
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   windows:
-    runs-on: windows-latest
+    runs-on: windows-2025
     timeout-minutes: 350
 
     steps:
@@ -34,14 +38,32 @@ jobs:
         shell: powershell
         run: |
           $minutes = [int]"${{ inputs.session_minutes }}"
-          if ($minutes -lt 30 -or $minutes -gt 330) { throw "session_minutes must be between 30 and 330." }
+          if ($minutes -lt 30 -or $minutes -gt 320) { throw "session_minutes must be between 30 and 320." }
           "minutes=$minutes" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Harden runner for long interactive session
+        shell: powershell
+        run: |
+          # Prevent sleep/hibernate and reduce the chance of Windows Update restarting the VM.
+          powercfg /hibernate off | Out-Null
+          powercfg /change standby-timeout-ac 0
+          powercfg /change monitor-timeout-ac 0
+          powercfg /change disk-timeout-ac 0
+          New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Force | Out-Null
+          New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoRebootWithLoggedOnUsers -PropertyType DWord -Value 1 -Force | Out-Null
+
+          # Keep the Actions worker responsive if an interactive build temporarily consumes CPU.
+          Get-Process -Name 'Runner.Listener','Runner.Worker' -ErrorAction SilentlyContinue | ForEach-Object {
+            try { $_.PriorityClass = 'AboveNormal' } catch {}
+          }
 
       - name: Install Tailscale
         shell: powershell
         run: |
           choco install tailscale -y --no-progress
-          Start-Service Tailscale -ErrorAction SilentlyContinue
+          $svc = Get-Service -Name Tailscale -ErrorAction SilentlyContinue
+          if (-not $svc) { throw "Tailscale service was not installed." }
+          if ($svc.Status -ne 'Running') { Start-Service Tailscale }
           Start-Sleep -Seconds 5
 
       - name: Connect Tailscale
@@ -51,19 +73,28 @@ jobs:
         run: |
           if ([string]::IsNullOrWhiteSpace($env:TAILSCALE_AUTHKEY)) { throw "Missing repository secret: TAILSCALE_AUTHKEY" }
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
-          & $ts up --authkey="$env:TAILSCALE_AUTHKEY" --hostname="gh-win-$env:GITHUB_RUN_ID" --unattended --accept-dns=false --reset
+          if (-not (Test-Path $ts)) { throw "Tailscale CLI not found." }
+
+          & $ts up --authkey="$env:TAILSCALE_AUTHKEY" --hostname="gh-win-$env:GITHUB_RUN_ID" --unattended --accept-dns=false --accept-routes=false
           if ($LASTEXITCODE -ne 0) { throw "tailscale up failed: $LASTEXITCODE" }
+
+          $ip = (& $ts ip -4 | Select-Object -First 1).Trim()
+          if ([string]::IsNullOrWhiteSpace($ip)) { throw "Tailscale connected but no IPv4 address was assigned." }
+          Write-Host "Tailscale IPv4: $ip"
 
       - name: Enable secure RDP
         id: rdp
         shell: powershell
         run: |
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          $tailscaleIp = (& $ts ip -4 | Select-Object -First 1).Trim()
+
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 1
 
           Disable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
           Remove-NetFirewallRule -DisplayName "GitHub Actions Tailscale RDP" -ErrorAction SilentlyContinue
-          New-NetFirewallRule -DisplayName "GitHub Actions Tailscale RDP" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3389 -RemoteAddress 100.64.0.0/10
+          New-NetFirewallRule -DisplayName "GitHub Actions Tailscale RDP" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3389 -LocalAddress $tailscaleIp -RemoteAddress 100.64.0.0/10 | Out-Null
 
           $user = "RunnerAdmin"
           $password = "GhA!" + [guid]::NewGuid().ToString("N").Substring(0,20)
@@ -93,19 +124,50 @@ jobs:
           Write-Host "Username    : $env:RDP_USER"
           Write-Host "Password    : $env:RDP_PASSWORD"
           Write-Host "============================================================"
-          Write-Host "Connect from a device on the same Tailscale tailnet."
+          Write-Host "IMPORTANT: do not Restart/Shutdown Windows and do not disable network adapters."
+          Write-Host "Starting another run will be queued instead of cancelling this VPS."
 
-      - name: Keep session available
+      - name: Keep session available and monitor runner
         shell: powershell
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
           $minutes = [int]"${{ steps.session.outputs.minutes }}"
           $deadline = (Get-Date).AddMinutes($minutes)
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          $lastLog = (Get-Date).AddMinutes(-5)
+
           while ((Get-Date) -lt $deadline) {
-            $remaining = [math]::Ceiling(($deadline - (Get-Date)).TotalMinutes)
-            Write-Host "Session alive; about $remaining minute(s) remaining."
-            & $ts status
-            Start-Sleep -Seconds 300
+            # Keep the Tailscale service alive without changing the machine's default route or DNS.
+            $svc = Get-Service -Name Tailscale -ErrorAction SilentlyContinue
+            if ($svc -and $svc.Status -ne 'Running') {
+              Write-Warning "Tailscale service stopped; restarting it."
+              Start-Service Tailscale
+              Start-Sleep -Seconds 3
+            }
+
+            $ip = (& $ts ip -4 2>$null | Select-Object -First 1)
+            if ([string]::IsNullOrWhiteSpace($ip)) {
+              Write-Warning "Tailscale lost its IP; reconnecting."
+              & $ts up --authkey="$env:TAILSCALE_AUTHKEY" --hostname="gh-win-$env:GITHUB_RUN_ID" --unattended --accept-dns=false --accept-routes=false
+            }
+
+            # Give the GitHub Actions agent slightly higher priority than interactive build tools.
+            Get-Process -Name 'Runner.Listener','Runner.Worker' -ErrorAction SilentlyContinue | ForEach-Object {
+              try { $_.PriorityClass = 'AboveNormal' } catch {}
+            }
+
+            if (((Get-Date) - $lastLog).TotalMinutes -ge 5) {
+              $os = Get-CimInstance Win32_OperatingSystem
+              $freeMB = [math]::Round($os.FreePhysicalMemory / 1024)
+              $cpu = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
+              $remaining = [math]::Ceiling(($deadline - (Get-Date)).TotalMinutes)
+              $github443 = Test-NetConnection github.com -Port 443 -InformationLevel Quiet -WarningAction SilentlyContinue
+              Write-Host "Heartbeat: remaining=${remaining}m, freeRAM=${freeMB}MB, CPU=${cpu}%, GitHub443=$github443, TailscaleIP=$ip"
+              $lastLog = Get-Date
+            }
+
+            Start-Sleep -Seconds 30
           }
 
       - name: Disconnect Tailscale
