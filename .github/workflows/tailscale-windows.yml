@@ -1,81 +1,116 @@
-name: Debug Windows CI via Tailscale RDP
-on: 
+name: Temporary Windows 2025 via Tailscale RDP
+
+on:
   workflow_dispatch:
+    inputs:
+      session_minutes:
+        description: "RDP session length in minutes (30-330)"
+        required: true
+        default: "240"
+
+permissions:
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  debug-runner:
+  windows:
     runs-on: windows-latest
+    timeout-minutes: 350
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Fix System Environment (Disable Test Mode)
-        run: |
-          Write-Host "--- Dang thuc hien Fix Kernel Integrity ---"
-          # Tat Test Mode va Integrity Checks o cap do he thong
-          bcdedit /set testsigning off
-          bcdedit /set nointegritychecks off
-          
-          # Force ghi de vao Registry de "lua" cac ung dung kiem tra trang thai boot
-          reg add "HKLM\SYSTEM\CurrentControlSet\Control" /v "SystemStartOptions" /t REG_SZ /d " NOINTEGRITYCHECKS" /f
-          reg add "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v "VerifiedAndReputablePolicyState" /t REG_DWORD /d 0 /f
-          
-          # Reset lai trang thai Kernel Code Integrity qua Registry
-          reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v "FeatureSettingsOverride" /t REG_DWORD /d 0 /f
-          reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v "FeatureSettingsOverrideMask" /t REG_DWORD /d 3 /f
-          
-          Write-Host "Fix hoan tat. Dang tiep tuc setup..."
+      - name: Show runner image
         shell: powershell
+        run: |
+          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, OsBuildNumber
+          Write-Host "Runner image: $env:ImageOS / $env:ImageVersion"
 
-      - name: Install and Connect Tailscale manually
+      - name: Validate session length
+        id: session
+        shell: powershell
+        run: |
+          $minutes = [int]"${{ inputs.session_minutes }}"
+          if ($minutes -lt 30 -or $minutes -gt 330) { throw "session_minutes must be between 30 and 330." }
+          "minutes=$minutes" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Install Tailscale
+        shell: powershell
+        run: |
+          choco install tailscale -y --no-progress
+          Start-Service Tailscale -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 5
+
+      - name: Connect Tailscale
+        shell: powershell
         env:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
-          Write-Host "1. Installing Tailscale..."
-          choco install tailscale -y --no-progress
-          
-          Write-Host "2. Waiting for service..."
-          Start-Sleep -Seconds 5
-          
-          Write-Host "3. Connecting to Tailscale..."
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTHKEY --unattended --reset
-        shell: powershell
+          if ([string]::IsNullOrWhiteSpace($env:TAILSCALE_AUTHKEY)) { throw "Missing repository secret: TAILSCALE_AUTHKEY" }
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          & $ts up --authkey="$env:TAILSCALE_AUTHKEY" --hostname="gh-win-$env:GITHUB_RUN_ID" --unattended --accept-dns=false --reset
+          if ($LASTEXITCODE -ne 0) { throw "tailscale up failed: $LASTEXITCODE" }
 
-      - name: Enable RDP and Create User
+      - name: Enable secure RDP
+        id: rdp
+        shell: powershell
         run: |
-          # Cho phep ket noi RDP
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
-          Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 1
-          
-          # Tao tai khoan RunnerAdmin
-          $User = 'RunnerAdmin'
-          $Password = ConvertTo-SecureString 'TempPassword123!@' -AsPlainText -Force
-          
-          if (Get-LocalUser -Name $User -ErrorAction SilentlyContinue) {
-              Set-LocalUser -Name $User -Password $Password
+
+          Disable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+          Remove-NetFirewallRule -DisplayName "GitHub Actions Tailscale RDP" -ErrorAction SilentlyContinue
+          New-NetFirewallRule -DisplayName "GitHub Actions Tailscale RDP" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3389 -RemoteAddress 100.64.0.0/10
+
+          $user = "RunnerAdmin"
+          $password = "GhA!" + [guid]::NewGuid().ToString("N").Substring(0,20)
+          $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+
+          if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) {
+            Set-LocalUser -Name $user -Password $securePassword
           } else {
-              New-LocalUser -Name $User -Password $Password -FullName 'RunnerAdmin' -Description 'RDPUser'
-              Add-LocalGroupMember -Group 'Administrators' -Member $User
+            New-LocalUser -Name $user -Password $securePassword -FullName "Runner Admin" -Description "Temporary RDP user"
           }
-        shell: powershell
 
-      - name: Display Connection Info
-        run: |
-          $TailscaleIP = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
-          Write-Host "==========================================================="
-          Write-Host "VPS CUA BAN DA SAN SANG!"
-          Write-Host "IP Tailscale: $TailscaleIP"
-          Write-Host "User:         RunnerAdmin"
-          Write-Host "Pass:         TempPassword123!@"
-          Write-Host "==========================================================="
-        shell: powershell
+          Add-LocalGroupMember -Group "Administrators" -Member $user -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user -ErrorAction SilentlyContinue
+          "username=$user" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "password=$password" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      - name: Keep Runner Alive
-        run: |
-          Write-Host "Dang giu VPS song trong 6 tieng..."
-          Start-Sleep -Seconds 21600
+      - name: Connection info
         shell: powershell
+        env:
+          RDP_USER: ${{ steps.rdp.outputs.username }}
+          RDP_PASSWORD: ${{ steps.rdp.outputs.password }}
+        run: |
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          $ip = (& $ts ip -4 | Select-Object -First 1).Trim()
+          Write-Host "============================================================"
+          Write-Host "RDP address : $ip"
+          Write-Host "Username    : $env:RDP_USER"
+          Write-Host "Password    : $env:RDP_PASSWORD"
+          Write-Host "============================================================"
+          Write-Host "Connect from a device on the same Tailscale tailnet."
+
+      - name: Keep session available
+        shell: powershell
+        run: |
+          $minutes = [int]"${{ steps.session.outputs.minutes }}"
+          $deadline = (Get-Date).AddMinutes($minutes)
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          while ((Get-Date) -lt $deadline) {
+            $remaining = [math]::Ceiling(($deadline - (Get-Date)).TotalMinutes)
+            Write-Host "Session alive; about $remaining minute(s) remaining."
+            & $ts status
+            Start-Sleep -Seconds 300
+          }
+
+      - name: Disconnect Tailscale
+        if: always()
+        shell: powershell
+        run: |
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          if (Test-Path $ts) { & $ts logout }
